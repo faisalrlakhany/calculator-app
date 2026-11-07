@@ -1,7 +1,7 @@
 /**
  * CalculatorApp — ek hi file mein pura calculator.
  * Stack: React Native + Expo, sirf Expo built-ins:
- *   expo-haptics, expo-clipboard, @react-native-async-storage/async-storage
+ *   expo-haptics, @react-native-async-storage/async-storage
  * Animations: RN Animated + PanResponder. eval()/new Function() — kabhi nahi.
  * Engine: token expression + recursive-descent parser (² postfix, ( ) brackets).
  */
@@ -31,7 +31,6 @@ import {
 import type { PanResponderInstance, StyleProp, ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
 
 /* Android par LayoutAnimation delete/collapse animate karta hai */
@@ -877,7 +876,7 @@ function SwipeRow(props: {
   return (
     <Animated.View
       {...(hidden ? {} : pan.panHandlers)}
-      style={[style, { backgroundColor: rowBg, transform: [{ translateX: hidden ? 0 : translate }] }]}
+      style={[style, { backgroundColor: rowBg, borderRadius: 18, overflow: 'hidden', transform: [{ translateX: hidden ? 0 : translate }] }]}
     >
       {children}
     </Animated.View>
@@ -896,8 +895,9 @@ function BottomSheetShell(props: {
   accent?: string;
   children: React.ReactNode;
   maxHeightPct?: number;
+  hideDefaultHeader?: boolean;
 }) {
-  const { visible, onClose, palette, title, accent, children, maxHeightPct } = props;
+  const { visible, onClose, palette, title, accent, children, maxHeightPct, hideDefaultHeader } = props;
   const overlayOpacity = useAnimatedValue(0);
 
   useEffect(() => {
@@ -926,18 +926,20 @@ function BottomSheetShell(props: {
           ]}
         >
           <View style={[styles.sheetHandle, { backgroundColor: palette.dimmed }]} />
-          <View style={styles.sheetHeader}>
-            <Text style={[styles.sheetTitle, { color: accent ?? palette.sheetText }]}>{title}</Text>
-            <Pressable
-              onPress={onClose}
-              accessibilityRole="button"
-              accessibilityLabel={`Close ${title}`}
-              hitSlop={8}
-              style={styles.sheetCloseBtn}
-            >
-              <Text style={[styles.sheetClose, { color: palette.sheetText }]}>✕</Text>
-            </Pressable>
-          </View>
+          {!hideDefaultHeader && (
+            <View style={styles.sheetHeader}>
+              <Text style={[styles.sheetTitle, { color: accent ?? palette.sheetText }]}>{title}</Text>
+              <Pressable
+                onPress={onClose}
+                accessibilityRole="button"
+                accessibilityLabel={`Close ${title}`}
+                hitSlop={8}
+                style={styles.sheetCloseBtn}
+              >
+                <Text style={[styles.sheetClose, { color: palette.sheetText }]}>✕</Text>
+              </Pressable>
+            </View>
+          )}
           {children}
         </View>
       </View>
@@ -1025,6 +1027,86 @@ function ConfirmClearModal(props: {
               ]}
             >
               <Text style={[styles.confirmBtnText, { color: '#FFFFFF' }]}>Clear all</Text>
+            </Pressable>
+          </View>
+        </Animated.View>
+      </View>
+    </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* ConfirmDeleteModal — single entry delete dialog                     */
+/* ------------------------------------------------------------------ */
+
+function ConfirmDeleteModal(props: {
+  visible: boolean;
+  palette: Palette;
+  haptics: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const { visible, palette, haptics, onCancel, onConfirm } = props;
+  const appear = useAnimatedValue(0);
+
+  useEffect(() => {
+    if (visible) {
+      Animated.spring(appear, { toValue: 1, useNativeDriver: true, speed: 22, bounciness: 6 }).start();
+    } else {
+      Animated.timing(appear, { toValue: 0, duration: 140, useNativeDriver: true }).start();
+    }
+  }, [visible, appear]);
+
+  const handleConfirm = () => {
+    if (haptics) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+    onConfirm();
+  };
+
+  return (
+    <Modal transparent visible={visible} animationType="fade" onRequestClose={onCancel}>
+      <View style={styles.confirmRoot}>
+        <Pressable onPress={onCancel} style={StyleSheet.absoluteFill} accessibilityLabel="Close delete dialog" />
+        <Animated.View
+          style={[
+            styles.confirmCard,
+            { backgroundColor: palette.sheet },
+            {
+              opacity: appear,
+              transform: [{ scale: appear.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1] }) }],
+            },
+          ]}
+        >
+          <View style={[styles.confirmIconWrap, { backgroundColor: '#FEE2E2' }]}>
+            <Text style={[styles.confirmIcon, { color: '#DC2626' }]}>🗑️</Text>
+          </View>
+          <Text style={[styles.confirmTitle, { color: palette.sheetText }]}>Delete entry?</Text>
+          <Text style={[styles.confirmMessage, { color: palette.entryMeta }]}>
+            Ye calculation hamesha ke liye delete ho jayegi.
+          </Text>
+          <View style={styles.confirmButtons}>
+            <Pressable
+              onPress={onCancel}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel"
+              style={({ pressed }) => [
+                styles.confirmBtn,
+                { backgroundColor: palette.sheetEntry },
+                pressed && { opacity: 0.8 },
+              ]}
+            >
+              <Text style={[styles.confirmBtnText, { color: palette.sheetText }]}>Cancel</Text>
+            </Pressable>
+            <Pressable
+              onPress={handleConfirm}
+              accessibilityRole="button"
+              accessibilityLabel="Delete entry"
+              style={({ pressed }) => [
+                styles.confirmBtn,
+                { backgroundColor: '#DC2626' },
+                pressed && { opacity: 0.85 },
+              ]}
+            >
+              <Text style={[styles.confirmBtnText, { color: '#FFFFFF' }]}>Delete</Text>
             </Pressable>
           </View>
         </Animated.View>
@@ -1182,20 +1264,7 @@ function HistorySheet(props: {
     else onRestore(e);
   };
 
-  const copyEntry = async (e: HistoryEntry) => {
-    if (haptics) Haptics.selectionAsync().catch(() => {});
-    try {
-      await Clipboard.setStringAsync(e.result);
-      if (copiedTimerId !== -1) clearTimeout(copiedTimerId);
-      setCopiedId(e.id);
-      setCopiedTimerId(setTimeout(() => setCopiedId(null), 1600));
-    } catch {
-      // silently fail
-    }
-  };
-
-  const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [copiedTimerId, setCopiedTimerId] = useState(-1);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const sections = useMemo<HistorySection[]>(() => {
     const sorted = [...history].sort((a, b) => b.ts - a.ts);
@@ -1210,7 +1279,7 @@ function HistorySheet(props: {
   }, [history]);
 
   return (
-    <BottomSheetShell visible={visible} onClose={closeSheet} palette={palette} title="" maxHeightPct={70}>
+    <BottomSheetShell visible={visible} onClose={closeSheet} palette={palette} title="" maxHeightPct={70} hideDefaultHeader>
       {/* ---------- Header: clear all + X | select mode: Cancel + trash + Select all ---------- */}
       <View style={styles.sheetHeader}>
         {selectMode ? (
@@ -1289,7 +1358,7 @@ function HistorySheet(props: {
             const isSelected = selected.has(item.id);
             return (
               <SwipeRow
-                onDelete={() => onDeleteEntry(item.id)}
+                onDelete={() => setDeleteConfirmId(item.id)}
                 rowBg="#DC2626"
                 style={styles.swipeRow}
                 hidden={selectMode}
@@ -1327,25 +1396,13 @@ function HistorySheet(props: {
                     </Text>
                   </View>
 
-                  {/* copy + trash (trash sirf normal mode) */}
-                  <Pressable
-                    onPress={() => copyEntry(item)}
-                    accessibilityRole="button"
-                    accessibilityLabel="Copy result"
-                    style={styles.iconBtn}
-                  >
-                    <Text style={[styles.iconBtnText, { color: palette.entryMeta }]}>⧉</Text>
-                    {copiedId === item.id && (
-                      <View pointerEvents="none" style={styles.copiedBadge}>
-                        <Text style={styles.copiedText}>Copied</Text>
-                      </View>
-                    )}
-                  </Pressable>
+                  {/* delete button (sirf normal mode mein) */}
                   {!selectMode && (
                     <Pressable
-                      onPress={() => onDeleteEntry(item.id)}
+                      onPress={() => setDeleteConfirmId(item.id)}
                       accessibilityRole="button"
                       accessibilityLabel="Delete entry"
+                      hitSlop={8}
                       style={styles.iconBtn}
                     >
                       <Text style={[styles.iconBtnText, { color: '#DC2626' }]}>🗑️</Text>
@@ -1372,6 +1429,18 @@ function HistorySheet(props: {
           </Pressable>
         </Animated.View>
       )}
+
+      {/* ---------- Single-entry delete confirm ---------- */}
+      <ConfirmDeleteModal
+        visible={deleteConfirmId !== null}
+        palette={palette}
+        haptics={haptics}
+        onCancel={() => setDeleteConfirmId(null)}
+        onConfirm={() => {
+          if (deleteConfirmId) onDeleteEntry(deleteConfirmId);
+          setDeleteConfirmId(null);
+        }}
+      />
     </BottomSheetShell>
   );
 }
@@ -1992,19 +2061,6 @@ const styles = StyleSheet.create({
   iconBtnText: {
     fontSize: 18,
   },
-  copiedBadge: {
-    position: 'absolute',
-    bottom: -14,
-    backgroundColor: '#0F172A',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 8,
-  },
-  copiedText: {
-    color: '#FFFFFF',
-    fontSize: 10,
-    fontWeight: '600',
-  },
   checkbox: {
     width: 22,
     height: 22,
@@ -2158,8 +2214,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    padding: 14,
-    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+    borderRadius: 18,
+    shadowColor: '#000',
+    shadowOpacity: 0.07,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
   historyEntryMain: {
     flex: 1,
