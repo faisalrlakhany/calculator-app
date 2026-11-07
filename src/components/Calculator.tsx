@@ -948,6 +948,83 @@ function BottomSheetShell(props: {
 }
 
 /* ------------------------------------------------------------------ */
+/* SplashLoader — app open hone par animated loader                    */
+/* ------------------------------------------------------------------ */
+
+function PulseRing({ anim, color }: { anim: Animated.Value; color: string }) {
+  return (
+    <Animated.View
+      pointerEvents="none"
+      style={{
+        position: 'absolute',
+        width: 110,
+        height: 110,
+        borderRadius: 55,
+        borderWidth: 2,
+        borderColor: color,
+        opacity: anim.interpolate({ inputRange: [0, 0.4, 1], outputRange: [0, 0.45, 0] }),
+        transform: [{ scale: anim.interpolate({ inputRange: [0, 1], outputRange: [0.65, 1.55] }) }],
+      }}
+    />
+  );
+}
+
+function SplashLoader({ palette }: { palette: Palette }) {
+  const ring1 = useAnimatedValue(0);
+  const ring2 = useAnimatedValue(0);
+  const ring3 = useAnimatedValue(0);
+  const iconScale = useAnimatedValue(0.8);
+
+  useEffect(() => {
+    // icon bounce in
+    Animated.spring(iconScale, {
+      toValue: 1,
+      useNativeDriver: true,
+      speed: 14,
+      bounciness: 10,
+    }).start();
+
+    // staggered pulse rings loop
+    const pulse = (anim: Animated.Value, delay: number) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(anim, { toValue: 1, duration: 900, useNativeDriver: true }),
+          Animated.timing(anim, { toValue: 0, duration: 0, useNativeDriver: true }),
+        ]),
+      );
+
+    const l1 = pulse(ring1, 0);
+    const l2 = pulse(ring2, 280);
+    const l3 = pulse(ring3, 560);
+    l1.start(); l2.start(); l3.start();
+    return () => { l1.stop(); l2.stop(); l3.stop(); };
+  }, [ring1, ring2, ring3, iconScale]);
+
+  return (
+    <View style={styles.loaderCenter}>
+      <PulseRing anim={ring1} color={palette.equalsBg} />
+      <PulseRing anim={ring2} color={palette.equalsBg} />
+      <PulseRing anim={ring3} color={palette.equalsBg} />
+
+      <Animated.View
+        style={[
+          styles.loaderIcon,
+          {
+            backgroundColor: palette.equalsBg,
+            transform: [{ scale: iconScale }],
+          },
+        ]}
+      >
+        <Text style={styles.loaderIconText}>=</Text>
+      </Animated.View>
+
+      <Text style={[styles.loaderLabel, { color: palette.entryMeta }]}>Calculator</Text>
+    </View>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* ConfirmClearModal — custom clear-history dialog                     */
 /* ------------------------------------------------------------------ */
 
@@ -1725,9 +1802,32 @@ export default function Calculator() {
   const lastPart = state.parts.length > 0 ? state.parts[state.parts.length - 1] : null;
   const activeOperatorLabel = lastPart !== null && isOp(lastPart) ? (lastPart === '-' ? '−' : lastPart) : null;
 
+  // ---- Splash loader: settings load hone tak dikhao ----
+  const loaderOpacity = useAnimatedValue(1);
+  const [showLoader, setShowLoader] = useState(true);
+
+  useEffect(() => {
+    if (settingsLoaded) {
+      // fade out loader
+      Animated.timing(loaderOpacity, {
+        toValue: 0,
+        duration: 480,
+        useNativeDriver: true,
+      }).start(() => setShowLoader(false));
+    }
+  }, [settingsLoaded, loaderOpacity]);
+
   return (
     <View style={[styles.root, { backgroundColor: palette.bg }]}>
       <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
+      {showLoader && (
+        <Animated.View
+          pointerEvents="none"
+          style={[styles.loaderOverlay, { backgroundColor: palette.bg, opacity: loaderOpacity }]}
+        >
+          <SplashLoader palette={palette} />
+        </Animated.View>
+      )}
       <View style={styles.flexCol}>
         {/* ---------- Top section (flex: 0) ---------- */}
         <View style={[styles.topSection, { paddingTop: insets.top + 8 }]}>
@@ -2272,5 +2372,44 @@ const styles = StyleSheet.create({
   toastText: {
     fontSize: 14,
     fontWeight: '600',
+  },
+  // ---- Splash Loader ----
+  loaderOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loaderCenter: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  loaderIcon: {
+    width: 88,
+    height: 88,
+    borderRadius: 44,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#10B981',
+    shadowOpacity: 0.35,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 8,
+  },
+  loaderIconText: {
+    fontSize: 40,
+    fontWeight: '300',
+    color: '#FFFFFF',
+    lineHeight: 48,
+  },
+  loaderLabel: {
+    marginTop: 24,
+    fontSize: 15,
+    fontWeight: '500',
+    letterSpacing: 0.5,
   },
 });
