@@ -15,7 +15,9 @@
         "foregroundImage": "./assets/logo.jpg",
         "backgroundColor": "#E8470A"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "enableProguardInReleaseBuilds": true,
+      "enableShrinkResourcesInReleaseBuilds": true
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -23,6 +25,7 @@
     "plugins": [
       "expo-router"
     ],
+    "jsEngine": "hermes",
     "extra": {
       "router": {
         "asyncRoutes": {
