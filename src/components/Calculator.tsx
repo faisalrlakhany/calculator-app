@@ -13,14 +13,17 @@ import React, {
 } from 'react';
 import {
   Animated,
+  LayoutAnimation,
   Modal,
   PanResponder,
+  Platform,
   Pressable,
   SectionList,
   StatusBar,
   StyleSheet,
   Switch,
   Text,
+  UIManager,
   View,
   useAnimatedValue,
   useColorScheme,
@@ -30,6 +33,11 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Clipboard from 'expo-clipboard';
 import * as Haptics from 'expo-haptics';
+
+/* Android par LayoutAnimation delete/collapse animate karta hai */
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 /* --- impure helpers (module level, render se door) --- */
 let historyIdSeq = 0;
@@ -850,16 +858,25 @@ function makeSwipePanResponder(
   });
 }
 
-function SwipeRow(props: { children: React.ReactNode; onDelete: () => void; rowBg: string; style?: StyleProp<ViewStyle> }) {
-  const { children, onDelete, rowBg, style } = props;
+function SwipeRow(props: {
+  children: React.ReactNode;
+  onDelete: () => void;
+  rowBg: string;
+  style?: StyleProp<ViewStyle>;
+  hidden?: boolean;
+}) {
+  const { children, onDelete, rowBg, style, hidden } = props;
   const translate = useAnimatedValue(0);
   const deleting = useMemo(() => ({ current: false }), []);
-  const pan = useMemo(() => makeSwipePanResponder(translate, onDelete, deleting), [translate, onDelete, deleting]);
+  const pan = useMemo(
+    () => makeSwipePanResponder(translate, onDelete, deleting),
+    [translate, onDelete, deleting],
+  );
 
   return (
     <Animated.View
-      {...pan.panHandlers}
-      style={[style, { backgroundColor: rowBg, transform: [{ translateX: translate }] }]}
+      {...(hidden ? {} : pan.panHandlers)}
+      style={[style, { backgroundColor: rowBg, transform: [{ translateX: hidden ? 0 : translate }] }]}
     >
       {children}
     </Animated.View>
@@ -1111,20 +1128,73 @@ function HistorySheet(props: {
   palette: Palette;
   history: HistoryEntry[];
   onRestore: (e: HistoryEntry) => void;
-  onDelete: (id: string) => void;
+  onDeleteEntry: (id: string) => void;
+  onDeleteMany: (ids: string[]) => void;
   onClear: () => void;
+  haptics: boolean;
+  snackbar: { message: string; undo: () => void } | null;
 }) {
-  const { visible, onClose, palette, history, onRestore, onDelete, onClear } = props;
-  const [toast, setToast] = useState<string | null>(null);
-  const toastAnim = useAnimatedValue(0);
+  const {
+    visible, onClose, palette, history, onRestore,
+    onDeleteEntry, onDeleteMany, onClear, haptics, snackbar,
+  } = props;
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
 
-  const showToast = (msg: string) => {
-    setToast(msg);
-    Animated.sequence([
-      Animated.timing(toastAnim, { toValue: 1, duration: 140, useNativeDriver: true }),
-      Animated.timing(toastAnim, { toValue: 0, duration: 900, delay: 700, useNativeDriver: true }),
-    ]).start(() => setToast(null));
+  // sheet band hone par select mode reset
+  const closeSheet = () => {
+    setSelectMode(false);
+    setSelected(new Set());
+    onClose();
   };
+
+  const enterSelect = useCallback((firstId: string) => {
+    if (haptics) Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+    setSelectMode(true);
+    setSelected(new Set([firstId]));
+  }, [haptics]);
+
+  const toggleSelect = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      if (next.size === 0) setSelectMode(false); // sab deselect => mode band
+      return next;
+    });
+  };
+
+  const selectAll = () => {
+    setSelected(new Set(history.map((e) => e.id)));
+    if (haptics) Haptics.selectionAsync().catch(() => {});
+  };
+
+  const deleteSelected = () => {
+    const ids = [...selected];
+    onDeleteMany(ids);
+    setSelectMode(false);
+    setSelected(new Set());
+  };
+
+  const tapEntry = (e: HistoryEntry) => {
+    if (selectMode) toggleSelect(e.id);
+    else onRestore(e);
+  };
+
+  const copyEntry = async (e: HistoryEntry) => {
+    if (haptics) Haptics.selectionAsync().catch(() => {});
+    try {
+      await Clipboard.setStringAsync(e.result);
+      if (copiedTimerId !== -1) clearTimeout(copiedTimerId);
+      setCopiedId(e.id);
+      setCopiedTimerId(setTimeout(() => setCopiedId(null), 1600));
+    } catch {
+      // silently fail
+    }
+  };
+
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [copiedTimerId, setCopiedTimerId] = useState(-1);
 
   const sections = useMemo<HistorySection[]>(() => {
     const sorted = [...history].sort((a, b) => b.ts - a.ts);
@@ -1138,17 +1208,67 @@ function HistorySheet(props: {
     return out;
   }, [history]);
 
-  const copyEntry = async (e: HistoryEntry) => {
-    try {
-      await Clipboard.setStringAsync(e.result);
-      showToast('Copied');
-    } catch {
-      showToast('Copy failed');
-    }
-  };
-
   return (
-    <BottomSheetShell visible={visible} onClose={onClose} palette={palette} title="History" maxHeightPct={70}>
+    <BottomSheetShell visible={visible} onClose={closeSheet} palette={palette} title="" maxHeightPct={70}>
+      {/* ---------- Header: clear all + X | select mode: Cancel + trash + Select all ---------- */}
+      <View style={styles.sheetHeader}>
+        {selectMode ? (
+          <>
+            <Pressable onPress={closeSheet} accessibilityRole="button" accessibilityLabel="Cancel selection">
+              <Text style={[styles.headerChipText, { color: palette.operatorBg }]}>Cancel</Text>
+            </Pressable>
+            <Text style={[styles.sheetTitle, { color: palette.sheetText, flex: 1, textAlign: 'center', fontSize: 16 }]}>
+              {selected.size} selected
+            </Text>
+            <View style={styles.headerRight}>
+              <Pressable onPress={selectAll} accessibilityRole="button" accessibilityLabel="Select all entries">
+                <Text style={[styles.headerChipText, { color: palette.operatorBg }]}>Select all</Text>
+              </Pressable>
+              <Pressable
+                onPress={deleteSelected}
+                disabled={selected.size === 0}
+                accessibilityRole="button"
+                accessibilityLabel="Delete selected entries"
+                style={styles.iconBtn}
+              >
+                <Text style={[styles.iconBtnText, { opacity: selected.size === 0 ? 0.4 : 1, color: '#DC2626' }]}>🗑️</Text>
+              </Pressable>
+            </View>
+          </>
+        ) : (
+          <>
+            <Text style={[styles.sheetTitle, { color: palette.operatorBg }]}>History</Text>
+            <View style={styles.headerRight}>
+              <Pressable
+                onPress={onClear}
+                disabled={history.length === 0}
+                accessibilityRole="button"
+                accessibilityLabel="Clear all history"
+                hitSlop={8}
+              >
+                <Text
+                  style={[
+                    styles.headerChipText,
+                    { color: '#DC2626', opacity: history.length === 0 ? 0.35 : 1 },
+                  ]}
+                >
+                  Clear all
+                </Text>
+              </Pressable>
+              <Pressable
+                onPress={closeSheet}
+                accessibilityRole="button"
+                accessibilityLabel="Close history"
+                hitSlop={8}
+                style={styles.sheetCloseBtn}
+              >
+                <Text style={[styles.sheetClose, { color: palette.sheetText }]}>✕</Text>
+              </Pressable>
+            </View>
+          </>
+        )}
+      </View>
+
       {history.length === 0 ? (
         <View style={styles.historyEmpty}>
           <Text style={[styles.historyEmptyIcon, { color: palette.dimmed }]}>🕒</Text>
@@ -1164,45 +1284,91 @@ function HistorySheet(props: {
           renderSectionHeader={({ section }) => (
             <Text style={[styles.historySectionTitle, { color: palette.entryMeta }]}>{section.title}</Text>
           )}
-          renderItem={({ item }) => (
-            <SwipeRow onDelete={() => onDelete(item.id)} rowBg="transparent" style={styles.swipeRow}>
-              <Pressable
-                onPress={() => onRestore(item)}
-                onLongPress={() => copyEntry(item)}
-                accessibilityRole="button"
-                accessibilityLabel={`Restore ${item.expression} equals ${item.result}`}
-                style={[styles.historyEntryCard, { backgroundColor: palette.sheetEntry }]}
+          renderItem={({ item }) => {
+            const isSelected = selected.has(item.id);
+            return (
+              <SwipeRow
+                onDelete={() => onDeleteEntry(item.id)}
+                rowBg="#DC2626"
+                style={styles.swipeRow}
+                hidden={selectMode}
               >
-                <View style={styles.historyEntryMain}>
-                  <Text style={[styles.historyExpression, { color: palette.entryMeta }]} numberOfLines={1}>
-                    {item.expression}
-                  </Text>
-                  <Text style={[styles.historyResult, { color: palette.sheetText }]} numberOfLines={1}>
-                    {commify(item.result)}
-                  </Text>
-                </View>
-                <Text style={[styles.historyTime, { color: palette.entryMeta }]}>{timeLabel(item.ts)}</Text>
-              </Pressable>
-            </SwipeRow>
-          )}
+                <Pressable
+                  onPress={() => tapEntry(item)}
+                  onLongPress={selectMode ? undefined : () => enterSelect(item.id)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`History ${item.expression} equals ${item.result}`}
+                  style={[
+                    styles.historyEntryCard,
+                    { backgroundColor: palette.sheetEntry },
+                    selectMode && isSelected && { borderColor: palette.operatorBg, borderWidth: 2 },
+                  ]}
+                >
+                  {/* selected-mode checkbox */}
+                  {selectMode && (
+                    <View
+                      style={[
+                        styles.checkbox,
+                        { borderColor: palette.dimmed, backgroundColor: isSelected ? palette.operatorBg : 'transparent' },
+                      ]}
+                    >
+                      {isSelected && <Text style={styles.checkboxTick}>{'✓'}</Text>}
+                    </View>
+                  )}
+
+                  <View style={styles.historyEntryMain}>
+                    <Text style={[styles.historyTime, { color: palette.entryMeta }]}>{timeLabel(item.ts)}</Text>
+                    <Text style={[styles.historyExpression, { color: palette.entryMeta }]} numberOfLines={1}>
+                      {item.expression}
+                    </Text>
+                    <Text style={[styles.historyResult, { color: palette.sheetText }]} numberOfLines={1}>
+                      {commify(item.result)}
+                    </Text>
+                  </View>
+
+                  {/* copy + trash (trash sirf normal mode) */}
+                  <Pressable
+                    onPress={() => copyEntry(item)}
+                    accessibilityRole="button"
+                    accessibilityLabel="Copy result"
+                    style={styles.iconBtn}
+                  >
+                    <Text style={[styles.iconBtnText, { color: palette.entryMeta }]}>⧉</Text>
+                    {copiedId === item.id && (
+                      <View pointerEvents="none" style={styles.copiedBadge}>
+                        <Text style={styles.copiedText}>Copied</Text>
+                      </View>
+                    )}
+                  </Pressable>
+                  {!selectMode && (
+                    <Pressable
+                      onPress={() => onDeleteEntry(item.id)}
+                      accessibilityRole="button"
+                      accessibilityLabel="Delete entry"
+                      style={styles.iconBtn}
+                    >
+                      <Text style={[styles.iconBtnText, { color: '#DC2626' }]}>🗑️</Text>
+                    </Pressable>
+                  )}
+                </Pressable>
+              </SwipeRow>
+            );
+          }}
         />
       )}
 
-      <Pressable
-        onPress={onClear}
-        accessibilityRole="button"
-        accessibilityLabel="Clear history"
-        style={[styles.clearHistoryBtn, { backgroundColor: palette.clearBg }]}
-        disabled={history.length === 0}
-      >
-        <Text style={[styles.clearHistoryText, { color: palette.clearText, opacity: history.length === 0 ? 0.5 : 1 }]}>
-          Clear History
-        </Text>
-      </Pressable>
-
-      {toast !== null && (
-        <Animated.View pointerEvents="none" style={[styles.toast, { backgroundColor: palette.toast, opacity: toastAnim }]}>
-          <Text style={[styles.toastText, { color: palette.toastText }]}>{toast}</Text>
+      {/* ---------- Undo snackbar (4s) ---------- */}
+      {snackbar !== null && (
+        <Animated.View style={[styles.snackBar, { backgroundColor: palette.toast }]}>
+          <Text style={[styles.snackBarText, { color: palette.toastText }]}>{snackbar.message}</Text>
+          <Pressable
+            onPress={snackbar.undo}
+            accessibilityRole="button"
+            accessibilityLabel="Undo delete"
+            hitSlop={8}
+          >
+            <Text style={[styles.snackBarUndo, { color: palette.operatorBg }]}>Undo</Text>
+          </Pressable>
         </Animated.View>
       )}
     </BottomSheetShell>
@@ -1258,6 +1424,56 @@ export default function Calculator() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [toolsOpen, setToolsOpen] = useState(false);
+  // ---- Undo snackbar (delete/clear ke liye, 4s auto-hide) ----
+  const [snackbar, setSnackbar] = useState<{ message: string; undo: () => void } | null>(null);
+  const [undoTimerId, setUndoTimerId] = useState(-1);
+
+  function pushUndo(message: string, restore: () => void) {
+    if (undoTimerId !== -1) clearTimeout(undoTimerId);
+    setSnackbar({
+      message,
+      undo: () => {
+        setUndoTimerId(-1);
+        setSnackbar(null);
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        restore();
+      },
+    });
+    setUndoTimerId(setTimeout(() => setSnackbar(null), 4000));
+  }
+
+  function makeRestoreAt(entry: HistoryEntry, index: number) {
+    return () => {
+      setHistory((prev) => {
+        const copy = [...prev];
+        copy.splice(Math.min(index, copy.length), 0, entry);
+        return copy;
+      });
+    };
+  }
+
+  // ek entry delete (trash icon ya swipe) — Undo ke saath
+  function deleteEntry(id: string) {
+    const idx = history.findIndex((en) => en.id === id);
+    if (idx === -1) return;
+    const entry = history[idx];
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setHistory((prev) => prev.filter((en) => en.id !== id));
+    pushUndo('Calculation delete hui', makeRestoreAt(entry, idx));
+  }
+
+  // select mode bulk delete — ek hi snackbar
+  function deleteMany(ids: string[]) {
+    const snapshot = history;
+    const removed = ids.filter((id) => snapshot.some((en) => en.id === id));
+    if (removed.length === 0) return;
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    setHistory((prev) => prev.filter((en) => !ids.includes(en.id)));
+    pushUndo(`Ye ${removed.length} calculation${removed.length === 1 ? '' : 's'} delete hui`, () => {
+      setHistory(snapshot);
+    });
+  }
+
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
 
   useEffect(() => {
@@ -1320,7 +1536,14 @@ export default function Calculator() {
 
   function handleClearConfirm() {
     setConfirmClearOpen(false);
+    const snapshot = history;
     setHistory([]);
+    // sheet wapas khol kar Undo snackbar dikhao
+    setHistoryOpen(true);
+    LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+    pushUndo('History saaf ho gayi', () => {
+      setHistory(snapshot);
+    });
   }
 
   // ---- Keypad config (span = kitne columns gherte hain) ----
@@ -1535,8 +1758,11 @@ export default function Calculator() {
         palette={palette}
         history={history}
         onRestore={restoreEntry}
-        onDelete={deleteEntry}
+        onDeleteEntry={deleteEntry}
+        onDeleteMany={deleteMany}
         onClear={handleClearRequest}
+        haptics={settings.haptics}
+        snackbar={snackbar}
       />
 
       <ConfirmClearModal
@@ -1544,7 +1770,10 @@ export default function Calculator() {
         count={history.length}
         palette={palette}
         haptics={settings.haptics}
-        onCancel={() => setConfirmClearOpen(false)}
+        onCancel={() => {
+          setConfirmClearOpen(false);
+          setHistoryOpen(true);
+        }}
         onConfirm={handleClearConfirm}
       />
     </View>
@@ -1553,10 +1782,6 @@ export default function Calculator() {
   function restoreEntry(e: HistoryEntry) {
     engine.restore(e.result);
     setHistoryOpen(false);
-  }
-
-  function deleteEntry(id: string) {
-    setHistory((prev) => prev.filter((en) => en.id !== id));
   }
 }
 
@@ -1737,6 +1962,76 @@ const styles = StyleSheet.create({
   },
   confirmBtnText: {
     fontSize: 16,
+    fontWeight: '700',
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  headerChipText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  iconBtn: {
+    width: 40,
+    height: 40,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 12,
+  },
+  iconBtnText: {
+    fontSize: 18,
+  },
+  copiedBadge: {
+    position: 'absolute',
+    bottom: -14,
+    backgroundColor: '#0F172A',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  copiedText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkboxTick: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '700',
+    lineHeight: 16,
+  },
+  snackBar: {
+    position: 'absolute',
+    alignSelf: 'center',
+    bottom: 84,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 20,
+    shadowColor: '#000',
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  snackBarText: {
+    fontSize: 13,
+    fontWeight: '500',
+  },
+  snackBarUndo: {
+    fontSize: 14,
     fontWeight: '700',
   },
   sheetRoot: {
