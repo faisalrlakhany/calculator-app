@@ -703,6 +703,7 @@ function CalcButton(props: {
   label: string;
   onPress: () => void;
   fontSize: number;
+  fontWeight?: '300' | '400' | '500' | '600' | '700';
   textColor: string;
   bgColor: string;
   active?: boolean;
@@ -712,7 +713,7 @@ function CalcButton(props: {
   accessibilityLabel: string;
   wrapFlex?: StyleProp<ViewStyle>;
 }) {
-  const { label, onPress, fontSize, textColor, bgColor, active, activeBg, activeText, haptics, accessibilityLabel, wrapFlex } = props;
+  const { label, onPress, fontSize, fontWeight = '600', textColor, bgColor, active, activeBg, activeText, haptics, accessibilityLabel, wrapFlex } = props;
   const scale = useAnimatedValue(1);
 
   const handlePressIn = () => {
@@ -747,7 +748,7 @@ function CalcButton(props: {
         <Text
           style={[
             styles.calcButtonText,
-            { color: active ? (activeText ?? textColor) : textColor, fontSize },
+            { color: active ? (activeText ?? textColor) : textColor, fontSize, fontWeight },
           ]}
         >
           {label}
@@ -1722,12 +1723,19 @@ export default function Calculator() {
               key={`row-${rIdx}`}
               style={rIdx === 0 ? styles.keyRowThin : styles.keyRow}
             >
-              {row.map(([label, variant, a11y, span]) => (
+              {row.map(([label, variant, a11y, span]) => {
+                // Font size: row-0 symbols aur multi-char labels chote, baqi 30
+                const btnFontSize = rIdx === 0 || label.length > 1 ? 26 : 30;
+                // Font weight: symbols/function labels lighter, numbers & operators bold
+                const lightLabels = new Set(['AC', '(', ')', '( )', 'x²', '±', '%', '⌫']);
+                const btnFontWeight: '300' | '400' | '500' | '600' = lightLabels.has(label) ? '400' : '600';
+                return (
                 <CalcButton
                   key={label}
                   label={label}
                   onPress={() => dispatch(label)}
-                  fontSize={rIdx === 0 || label.length > 1 ? 26 : 30}
+                  fontSize={btnFontSize}
+                  fontWeight={btnFontWeight}
                   active={variant === 'operator' && label === activeOperatorLabel}
                   activeBg={palette.operatorActiveBg}
                   activeText={palette.operatorActiveText}
@@ -1737,7 +1745,8 @@ export default function Calculator() {
                   accessibilityLabel={a11y}
                   wrapFlex={span === 2 ? styles.keyBtnWrapDouble : undefined}
                 />
-              ))}
+                );
+              })}
             </View>
           ))}
         </View>
@@ -1904,7 +1913,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   calcButtonText: {
-    fontWeight: '700',
+    fontWeight: '600',
   },
   confirmRoot: {
     flex: 1,
