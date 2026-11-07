@@ -9,10 +9,12 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react';
 import {
   Animated,
+  Image,
   LayoutAnimation,
   Modal,
   PanResponder,
@@ -957,13 +959,13 @@ function PulseRing({ anim, color }: { anim: Animated.Value; color: string }) {
       pointerEvents="none"
       style={{
         position: 'absolute',
-        width: 110,
-        height: 110,
-        borderRadius: 55,
-        borderWidth: 2,
+        width: 150,
+        height: 150,
+        borderRadius: 38,
+        borderWidth: 2.5,
         borderColor: color,
-        opacity: anim.interpolate({ inputRange: [0, 0.4, 1], outputRange: [0, 0.45, 0] }),
-        transform: [{ scale: anim.interpolate({ inputRange: [0, 1], outputRange: [0.65, 1.55] }) }],
+        opacity: anim.interpolate({ inputRange: [0, 0.4, 1], outputRange: [0, 0.5, 0] }),
+        transform: [{ scale: anim.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1.6] }) }],
       }}
     />
   );
@@ -1003,20 +1005,21 @@ function SplashLoader({ palette }: { palette: Palette }) {
 
   return (
     <View style={styles.loaderCenter}>
-      <PulseRing anim={ring1} color={palette.equalsBg} />
-      <PulseRing anim={ring2} color={palette.equalsBg} />
-      <PulseRing anim={ring3} color={palette.equalsBg} />
+      <PulseRing anim={ring1} color="#E8470A" />
+      <PulseRing anim={ring2} color="#E8470A" />
+      <PulseRing anim={ring3} color="#E8470A" />
 
       <Animated.View
         style={[
           styles.loaderIcon,
-          {
-            backgroundColor: palette.equalsBg,
-            transform: [{ scale: iconScale }],
-          },
+          { transform: [{ scale: iconScale }] },
         ]}
       >
-        <Text style={styles.loaderIconText}>=</Text>
+        <Image
+          source={require('../../assets/logo.jpg')}
+          style={styles.loaderIconImage}
+          resizeMode="contain"
+        />
       </Animated.View>
 
       <Text style={[styles.loaderLabel, { color: palette.entryMeta }]}>Calculator</Text>
@@ -1802,20 +1805,37 @@ export default function Calculator() {
   const lastPart = state.parts.length > 0 ? state.parts[state.parts.length - 1] : null;
   const activeOperatorLabel = lastPart !== null && isOp(lastPart) ? (lastPart === '-' ? '−' : lastPart) : null;
 
-  // ---- Splash loader: settings load hone tak dikhao ----
+  // ---- Splash loader: minimum 2s dikhao, phir fade out ----
   const loaderOpacity = useAnimatedValue(1);
   const [showLoader, setShowLoader] = useState(true);
+  const loaderReadyRef = useRef(false);   // settings loaded?
+  const timerDoneRef  = useRef(false);    // 2s timer done?
 
+  const tryHideLoader = useCallback(() => {
+    if (!loaderReadyRef.current || !timerDoneRef.current) return;
+    Animated.timing(loaderOpacity, {
+      toValue: 0,
+      duration: 500,
+      useNativeDriver: true,
+    }).start(() => setShowLoader(false));
+  }, [loaderOpacity]);
+
+  // 2 second minimum timer
+  useEffect(() => {
+    const t = setTimeout(() => {
+      timerDoneRef.current = true;
+      tryHideLoader();
+    }, 5500);
+    return () => clearTimeout(t);
+  }, [tryHideLoader]);
+
+  // settings load hone par
   useEffect(() => {
     if (settingsLoaded) {
-      // fade out loader
-      Animated.timing(loaderOpacity, {
-        toValue: 0,
-        duration: 480,
-        useNativeDriver: true,
-      }).start(() => setShowLoader(false));
+      loaderReadyRef.current = true;
+      tryHideLoader();
     }
-  }, [settingsLoaded, loaderOpacity]);
+  }, [settingsLoaded, tryHideLoader]);
 
   return (
     <View style={[styles.root, { backgroundColor: palette.bg }]}>
@@ -2389,22 +2409,22 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   loaderIcon: {
-    width: 88,
-    height: 88,
-    borderRadius: 44,
+    width: 120,
+    height: 120,
+    borderRadius: 28,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#10B981',
-    shadowOpacity: 0.35,
-    shadowRadius: 20,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 8,
+    overflow: 'hidden',
+    shadowColor: '#E8470A',
+    shadowOpacity: 0.4,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 6 },
+    elevation: 10,
   },
-  loaderIconText: {
-    fontSize: 40,
-    fontWeight: '300',
-    color: '#FFFFFF',
-    lineHeight: 48,
+  loaderIconImage: {
+    width: 120,
+    height: 120,
+    borderRadius: 28,
   },
   loaderLabel: {
     marginTop: 24,
